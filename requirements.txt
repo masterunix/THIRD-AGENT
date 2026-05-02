@@ -1,0 +1,33 @@
+# GlobalFreight AI Platform — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# Core
+numpy>=1.24.0
+requests>=2.28.0
+
+# LangChain ecosystem
+langchain>=0.1.0
+langchain-core>=0.1.10
+langchain-community>=0.0.13
+langchain-openai>=0.0.2
+langchain-text-splitters>=0.0.1
+langchain-classic>=1.0.0
+
+# Vector store and embeddings
+chromadb>=0.4.22
+sentence-transformers>=2.2.2
+
+# OpenAI SDK
+openai>=1.7.2
+
+# Web framework
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Level 3 Dependencies
+langgraph>=0.0.27
+openpyxl>=3.1.2
+pandas>=2.1.0

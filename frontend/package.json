@@ -1,0 +1,32 @@
+{
+  "name": "globalfreight-frontend",
+  "version": "2.0.0",
+  "description": "GlobalFreight AI Platform - Next.js Frontend with Enhanced Visuals",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.0.0",
+    "lucide-react": "^0.468.0",
+    "next": "16.2.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10.5.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "postcss": "^8.5.13",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5"
+  }
+}
