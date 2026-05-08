@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Send, FileText, Upload, Trash2, X, CheckCircle, AlertCircle } from 'lucide-react';
 import GlassCard from '../GlassCard';
 import ChatContainer from './ChatContainer';
+import FallbackToast from '../FallbackToast';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 
@@ -42,6 +43,26 @@ export default function Level1() {
   const [showDocModal, setShowDocModal] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [activeProvider, setActiveProvider] = useState('azure');
+  const [fallback, setFallback] = useState<{ requested: string; actual: string } | null>(null);
+
+  useEffect(() => {
+    fetchActiveProvider();
+  }, []);
+
+  const fetchActiveProvider = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/get-provider`);
+      if (res.ok) {
+        const data = await res.json();
+        setActiveProvider(data.active_provider);
+        return data.active_provider as string;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch active provider:', e);
+    }
+    return activeProvider;
+  };
 
   useEffect(() => {
     if (showDocModal) {
@@ -177,6 +198,9 @@ export default function Level1() {
     setLoading(true);
 
     try {
+      // Refresh active provider state before query to ensure detection is accurate
+      const currentRequested = await fetchActiveProvider();
+
       const response = await fetch(`${BACKEND_URL}/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -186,6 +210,12 @@ export default function Level1() {
       if (!response.ok) throw new Error('Backend request failed');
 
       const data = await response.json();
+      
+      // Detection Pattern - Use the fresh value from fetchActiveProvider
+      if (data.provider && data.provider !== currentRequested && data.provider !== 'timeout') {
+        setFallback({ requested: currentRequested, actual: data.provider });
+      }
+
       setMessages(prev => [...prev, {
         type: 'assistant',
         content: data.answer,
@@ -449,6 +479,11 @@ export default function Level1() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <FallbackToast 
+        fallback={fallback} 
+        onClose={() => setFallback(null)} 
+      />
     </div>
   );
 }

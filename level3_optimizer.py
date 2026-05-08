@@ -43,64 +43,34 @@ active_workflows = {}
 audit_logs = {}
 custom_dataset_path = None  # For custom uploaded files
 
-def call_llm(prompt: str, system_prompt: str = "", provider: str = "azure") -> str:
-    """Call LLM with multi-provider support - optimized for speed"""
-    if provider == "azure" and LLM:
-        try:
-            from langchain_core.messages import SystemMessage, HumanMessage
-            messages = []
-            if system_prompt:
-                messages.append(SystemMessage(content=system_prompt))
-            messages.append(HumanMessage(content=prompt))
-            # Set shorter timeout for faster responses
-            response = LLM.invoke(messages, config={"timeout": 10, "max_tokens": 50})
-            return response.content
-        except Exception as e:
-            print(f"Azure LLM error: {e}")
-            # Fallback to Gemini
-            result = call_llm_gemini(prompt, system_prompt)
-            if result:
-                return result
-            # Fallback to PAI
-            return call_llm_pai(prompt, system_prompt)
-    elif provider == "gemini":
-        result = call_llm_gemini(prompt, system_prompt)
-        if result:
-            return result
-        # Fallback to Azure
-        if LLM:
-            try:
-                from langchain_core.messages import SystemMessage, HumanMessage
-                messages = []
-                if system_prompt:
-                    messages.append(SystemMessage(content=system_prompt))
-                messages.append(HumanMessage(content=prompt))
-                response = LLM.invoke(messages)
-                return response.content
-            except:
-                pass
-        # Fallback to PAI
-        return call_llm_pai(prompt, system_prompt)
-    elif provider == "pai":
-        result = call_llm_pai(prompt, system_prompt)
-        if result:
-            return result
-        # Fallback to Azure
-        if LLM:
-            try:
-                from langchain_core.messages import SystemMessage, HumanMessage
-                messages = []
-                if system_prompt:
-                    messages.append(SystemMessage(content=system_prompt))
-                messages.append(HumanMessage(content=prompt))
-                response = LLM.invoke(messages)
-                return response.content
-            except:
-                pass
-        # Fallback to Gemini
-        return call_llm_gemini(prompt, system_prompt)
+def call_llm(prompt: str, system_prompt: str = "", provider: str = "azure") -> tuple[str, str]:
+    """Call LLM with multi-provider support - Returns (response, provider_used)"""
+    providers_list = [provider] + [p for p in ['azure', 'gemini', 'pai'] if p != provider]
     
-    return "LLM call failed - all providers unavailable"
+    for p in providers_list:
+        try:
+            if p == "azure" and LLM:
+                from langchain_core.messages import SystemMessage, HumanMessage
+                messages = []
+                if system_prompt:
+                    messages.append(SystemMessage(content=system_prompt))
+                messages.append(HumanMessage(content=prompt))
+                response = LLM.invoke(messages, config={"timeout": 10, "max_tokens": 50})
+                if response.content:
+                    return response.content, "azure"
+            elif p == "gemini":
+                result = call_llm_gemini(prompt, system_prompt)
+                if result:
+                    return result, "gemini"
+            elif p == "pai":
+                result = call_llm_pai(prompt, system_prompt)
+                if result:
+                    return result, "pai"
+        except Exception as e:
+            print(f"Provider {p} failed in Level 3: {e}")
+            continue
+            
+    return "LLM call failed", "timeout"
 
 def call_llm_gemini(prompt: str, system_prompt: str = "") -> str:
     """Call Gemini API with optimized settings"""
@@ -139,17 +109,15 @@ def call_llm_pai(prompt: str, system_prompt: str = "") -> str:
             "Authorization": f"Bearer {PAI_API_KEY}",
             "Content-Type": "application/json"
         }
+        full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER QUESTION:\n{prompt}" if system_prompt else prompt
         payload = {
             "model": "gemma4:26b",
             "messages": [
-                {"role": "system", "content": system_prompt} if system_prompt else None,
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": full_prompt}
             ],
             "max_tokens": 50,  # Limit response length
             "temperature": 0.3  # Lower for faster responses
         }
-        # Remove None values
-        payload["messages"] = [m for m in payload["messages"] if m is not None]
         
         resp = http_requests.post("https://pai-api.thepsi.com/api/v4/chat", json=payload, headers=headers, timeout=30)  # Increased timeout
         if resp.status_code == 200:
@@ -495,17 +463,21 @@ def process_single_shipment(shipment, global_idx, dataset, wf, provider, workflo
         
         if outcome in ['ESCALATED', 'REROUTED_RELAXED']:
             llm_prompt = f"{sh_id} ({shipment.get('tier')}): {outcome}. Why?"
-            rationale = call_llm(llm_prompt, "Explain in 10 words max.", provider)
+            rationale, provider_used = call_llm(llm_prompt, "Explain in 10 words max.", provider)
             if rationale:
                 final_decision['llm_rationale'] = rationale.strip()
+                final_decision['provider'] = provider_used
             else:
                 final_decision['llm_rationale'] = f"{outcome}: {final_decision.get('reason', 'See details')}"
+                final_decision['provider'] = provider_used
         else:
             if final_decision.get('selected_route'):
                 carrier = final_decision['selected_route'].get('carrier', 'alternative')
                 final_decision['llm_rationale'] = f"Optimal route via {carrier}"
+                final_decision['provider'] = provider # Default if no LLM call was made
             else:
                 final_decision['llm_rationale'] = "Route optimized successfully"
+                final_decision['provider'] = provider
         
         wf['decisions'][sh_id] = {
             "outcome": outcome,

@@ -6,6 +6,7 @@ import GlassCard from '../GlassCard';
 import EventList from './EventList';
 import EventDetails from './EventDetails';
 import ControlPanel from './ControlPanel';
+import FallbackToast from '../FallbackToast';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 
@@ -33,10 +34,27 @@ export default function Level2() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
+  const [activeProvider, setActiveProvider] = useState('azure');
+  const [fallback, setFallback] = useState<{ requested: string; actual: string } | null>(null);
 
   useEffect(() => {
     loadEvents();
+    fetchActiveProvider();
   }, []);
+
+  const fetchActiveProvider = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/get-provider`);
+      if (res.ok) {
+        const data = await res.json();
+        setActiveProvider(data.active_provider);
+        return data.active_provider as string;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch active provider:', e);
+    }
+    return activeProvider;
+  };
 
   const loadEvents = async () => {
     try {
@@ -55,6 +73,9 @@ export default function Level2() {
     setLoading(true);
 
     try {
+      // Refresh active provider state before request
+      const currentRequested = await fetchActiveProvider();
+
       const response = await fetch(`${BACKEND_URL}/process-event`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -63,6 +84,11 @@ export default function Level2() {
 
       const result = await response.json();
       
+      // Detection Pattern - Use the fresh value from fetchActiveProvider
+      if (result.provider && result.provider !== currentRequested && result.provider !== 'timeout') {
+        setFallback({ requested: currentRequested, actual: result.provider });
+      }
+
       if (response.ok) {
         setResults(prev => [result, ...prev]);
         if (currentIndex < events.length - 1) {
@@ -199,6 +225,11 @@ export default function Level2() {
           </GlassCard>
         </div>
       </div>
+
+      <FallbackToast 
+        fallback={fallback} 
+        onClose={() => setFallback(null)} 
+      />
     </div>
   );
 }

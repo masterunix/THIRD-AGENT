@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import GlassCard from '@/components/GlassCard';
 import { Play, Square, Loader2, CheckCircle, AlertTriangle, Clock, Upload, RefreshCw, FileText, Database } from 'lucide-react';
+import FallbackToast from '../FallbackToast';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 
@@ -19,6 +20,8 @@ export default function Level3() {
   const [datasetInfo, setDatasetInfo] = useState<any>(null);
   const [uploadStatus, setUploadStatus] = useState<string>('');
   const [isStarting, setIsStarting] = useState(false);
+  const [activeProvider, setActiveProvider] = useState('azure');
+  const [fallback, setFallback] = useState<{ requested: string; actual: string } | null>(null);
   
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<any>(null);
@@ -26,7 +29,22 @@ export default function Level3() {
 
   useEffect(() => {
     fetchDatasetInfo();
+    fetchActiveProvider();
   }, []);
+
+  const fetchActiveProvider = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/get-provider`);
+      if (res.ok) {
+        const data = await res.json();
+        setActiveProvider(data.active_provider);
+        return data.active_provider as string;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch active provider:', e);
+    }
+    return activeProvider;
+  };
 
   useEffect(() => {
     let interval: any;
@@ -137,10 +155,18 @@ export default function Level3() {
 
   const fetchDecision = async (wfId: string, shId: string) => {
     try {
+      const currentRequested = await fetchActiveProvider();
       const res = await fetch(`${BACKEND_URL}/level3/shipment-decision/${wfId}/${shId}`);
       if (res.ok) {
         const data = await res.json();
-        setDecisions(prev => ({ ...prev, [shId]: data.decision }));
+        const dec = data.decision;
+        
+        // Detection Pattern - Use the fresh value from fetchActiveProvider
+        if (dec.provider && dec.provider !== currentRequested && dec.provider !== 'timeout') {
+          setFallback({ requested: currentRequested, actual: dec.provider });
+        }
+
+        setDecisions(prev => ({ ...prev, [shId]: dec }));
       }
     } catch (e) {
       console.error(e);
@@ -161,6 +187,7 @@ export default function Level3() {
       const data = await res.json();
       setWorkflowId(data.workflow_id);
       setQueue(data.queue);
+      setActiveProvider(data.provider);
       setStatus('RUNNING');
       setCurrentIndex(0);
       setDecisions({});
@@ -453,6 +480,11 @@ export default function Level3() {
           </div>
         </div>
       )}
+
+      <FallbackToast 
+        fallback={fallback} 
+        onClose={() => setFallback(null)} 
+      />
     </div>
   );
 }

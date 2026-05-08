@@ -45,6 +45,9 @@ AZURE_OPENAI_API_VERSION = os.getenv('AZURE_OPENAI_API_VERSION', '2024-12-01-pre
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 PAI_API_KEY = os.getenv('PAI_API_KEY', '')
 
+# Available providers
+PROVIDERS = ['azure', 'gemini', 'pai']
+
 if not AZURE_OPENAI_API_KEY:
     raise ValueError("AZURE_OPENAI_API_KEY not found in environment variables")
 
@@ -74,6 +77,48 @@ cancellation_tracker = []
 shipment_context = {}
 query_cache = {}
 active_provider = 'azure'  # 'azure' | 'gemini' | 'pai'
+
+# ============================================================================
+# LLM WRAPPER WITH FALLBACK
+# ============================================================================
+
+def call_llm(prompt: str, system_prompt: str = "", requested_provider: str = None) -> tuple[str, str]:
+    """
+    Unified LLM call with fallback logic.
+    Returns (response_text, provider_used)
+    """
+    global active_provider
+    
+    # Use requested provider or global active provider
+    start_provider = requested_provider if requested_provider in PROVIDERS else active_provider
+    
+    # Reorder providers to start with the requested one
+    providers_list = [start_provider] + [p for p in PROVIDERS if p != start_provider]
+    
+    for provider in providers_list:
+        try:
+            result = ""
+            if provider == 'azure':
+                # Azure/LangChain logic
+                from langchain_core.messages import SystemMessage, HumanMessage
+                messages = []
+                if system_prompt:
+                    messages.append(SystemMessage(content=system_prompt))
+                messages.append(HumanMessage(content=prompt))
+                response = llm.invoke(messages)
+                result = response.content
+            elif provider == 'gemini':
+                result = _try_gemini(system_prompt, prompt, "CALL")
+            elif provider == 'pai':
+                result = _try_pai(system_prompt, prompt, "CALL")
+            
+            if result:
+                return result, provider
+        except Exception as e:
+            print(f"Provider {provider} failed: {e}")
+            continue
+            
+    return "All AI providers are currently unavailable. Please try again later.", "timeout"
 
 # ============================================================================
 # LEVEL 1: RAG ASSISTANT
@@ -411,51 +456,14 @@ def query():
 
 RULES:
 1. Answer ONLY from provided context
-2. If question is out-of-scope, respond: "I can only answer questions about GlobalFreight policies."
+2. If the answer is not in the context, respond: "I can only answer questions about GlobalFreight policies, tariffs, and operational procedures."
 3. Be precise and concise
 4. Never hallucinate
 
 Context:
 {context}"""
 
-        provider_used = active_provider
-        answer = ""
-        
-        if active_provider == 'azure':
-            try:
-                answer = qa_chain.invoke(question)
-            except Exception as azure_err:
-                print(f"Azure RAG failed: {azure_err}")
-                answer = _try_gemini(rag_system_prompt, f"Question: {question}\n\nAnswer:", "RAG")
-                if not answer:
-                    answer = _try_pai(rag_system_prompt, f"Question: {question}\n\nAnswer:", "RAG")
-                    provider_used = 'pai' if answer else 'timeout'
-                else:
-                    provider_used = 'gemini'
-                if not answer:
-                    answer = "All providers failed. Please try again later."
-        elif active_provider == 'gemini':
-            answer = _try_gemini(rag_system_prompt, f"Question: {question}\n\nAnswer:", "RAG")
-            if not answer:
-                try:
-                    answer = qa_chain.invoke(question)
-                    provider_used = 'azure'
-                except:
-                    answer = _try_pai(rag_system_prompt, f"Question: {question}\n\nAnswer:", "RAG")
-                    provider_used = 'pai' if answer else 'timeout'
-            if not answer:
-                answer = "All providers failed. Please try again later."
-        elif active_provider == 'pai':
-            answer = _try_pai(rag_system_prompt, f"Question: {question}\n\nAnswer:", "RAG")
-            if not answer:
-                try:
-                    answer = qa_chain.invoke(question)
-                    provider_used = 'azure'
-                except:
-                    answer = _try_gemini(rag_system_prompt, f"Question: {question}\n\nAnswer:", "RAG")
-                    provider_used = 'gemini' if answer else 'timeout'
-            if not answer:
-                answer = "All providers failed. Please try again later."
+        answer, provider_used = call_llm(f"Question: {question}\n\nAnswer:", rag_system_prompt)
         
         return jsonify({
             'answer': answer,
@@ -606,50 +614,23 @@ AUTO-RESOLVE: Minor delays <2h, Routine updates, Standard compensation
 
 Respond concisely with: SEVERITY | ACTION TAKEN | REASONING"""
 
-        # === PRIMARY: Use active provider ===
+        # For Level 2, we prefer the LangChain Agent if Azure is active and working
+        # because it has tool-calling capabilities.
+        agent_response = ""
+        provider_used = ""
+
         if active_provider == 'azure':
             try:
                 result = agent_executor.invoke({"input": event_description})
                 agent_response = result['output']
+                provider_used = 'azure'
             except Exception as azure_err:
-                print(f"Azure OpenAI failed: {azure_err}")
-                # Try Gemini fallback
-                agent_response = _try_gemini(system_prompt, event_description, event_id)
-                if not agent_response:
-                    agent_response = _try_pai(system_prompt, event_description, event_id)
-                if not agent_response:
-                    provider_used = 'timeout'
-                    agent_response = f"All providers failed. Azure error: {str(azure_err)[:100]}"
-                else:
-                    provider_used = 'gemini' if GEMINI_API_KEY else 'pai'
-        
-        elif active_provider == 'gemini':
-            agent_response = _try_gemini(system_prompt, event_description, event_id)
-            if not agent_response:
-                # Fallback to Azure
-                try:
-                    result = agent_executor.invoke({"input": event_description})
-                    agent_response = result['output']
-                    provider_used = 'azure'
-                except:
-                    agent_response = _try_pai(system_prompt, event_description, event_id)
-                    provider_used = 'pai' if agent_response else 'timeout'
-                    if not agent_response:
-                        agent_response = "All providers failed."
-        
-        elif active_provider == 'pai':
-            agent_response = _try_pai(system_prompt, event_description, event_id)
-            if not agent_response:
-                # Fallback to Azure
-                try:
-                    result = agent_executor.invoke({"input": event_description})
-                    agent_response = result['output']
-                    provider_used = 'azure'
-                except:
-                    agent_response = _try_gemini(system_prompt, event_description, event_id)
-                    provider_used = 'gemini' if agent_response else 'timeout'
-                    if not agent_response:
-                        agent_response = "All providers failed."
+                print(f"Azure Agent failed: {azure_err}")
+                # Fallback to pure LLM calls (non-agentic)
+                agent_response, provider_used = call_llm(event_description, system_prompt)
+        else:
+            # Direct LLM call for non-azure providers (they don't have the agent tools bound in this setup)
+            agent_response, provider_used = call_llm(event_description, system_prompt)
 
         duration = (datetime.now() - start_time).total_seconds()
         
@@ -795,8 +776,7 @@ def _try_pai(system_prompt: str, user_prompt: str, event_id: str) -> str:
         payload = {
             "model": "gemma4:26b",
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER QUESTION:\n{user_prompt}"}
             ]
         }
         resp = http_requests.post("https://pai-api.thepsi.com/api/v4/chat", json=payload, headers=headers, timeout=35)
